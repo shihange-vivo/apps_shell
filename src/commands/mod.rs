@@ -29,6 +29,7 @@ pub mod ps;
 pub mod pwd;
 pub mod rmdir;
 pub mod touch;
+pub mod run;
 pub mod truncate;
 pub mod umount;
 
@@ -97,6 +98,10 @@ pub static COMMANDS: Map<&'static str, CommandInfo> = phf_map! {
     "touch" => CommandInfo {
         handler: touch::command,
         description: "Update the access and modification times of each file to the current time, usage: touch <file>",
+    },
+    "run" => CommandInfo {
+        handler: run::command,
+        description: "Launch a dynamic application, usage: run <path> [arg...]",
     },
     "truncate" => CommandInfo {
         handler: truncate::command,
