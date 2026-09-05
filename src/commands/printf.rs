@@ -1,4 +1,4 @@
-// Copyright (c) 2025 vivo Mobile Communication Co., Ltd.
+// Copyright (c) 2026 vivo Mobile Communication Co., Ltd.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -12,93 +12,109 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-pub fn command(args: &[&str]) -> Result<(), String> {
+use crate::{console, shell_println};
+
+fn parse_i64(s: &str) -> Option<i64> {
+    if s.is_empty() {
+        return None;
+    }
+    let (neg, digits) = if let Some(rest) = s.strip_prefix('-') {
+        (true, rest)
+    } else {
+        (false, s)
+    };
+    let mut v = 0u64;
+    for b in digits.bytes() {
+        let d = (b as char).to_digit(10)?;
+        v = v.checked_mul(10)?.checked_add(d as u64)?;
+    }
+    if neg {
+        Some(-(v as i64))
+    } else {
+        Some(v as i64)
+    }
+}
+
+pub fn command(args: &[&str]) {
     if args.is_empty() {
-        return Err("Usage: printf string<%s, %d, %f> [arg...]".to_string());
+        shell_println!("Usage: printf string<%s, %d, %f> [arg...]");
+        return;
     }
-    let full_input = args.join(" ");
-    let (format_str, arguments) = split_format_and_args(&full_input)?;
-    match format_string(&format_str, arguments.as_slice()) {
-        Ok(s) => println!("Formatted: {}", s),
-        Err(e) => println!("Error: {}", e),
-    }
-    Ok(())
-}
 
-fn split_format_and_args(input: &str) -> Result<(String, Vec<String>), String> {
-    let mut chars = input.chars();
-    let mut format_str = String::new();
-    let mut arguments = String::new();
-    let mut in_quotes = false;
-    let mut args = false;
-    for c in chars {
-        match c {
-            '"' if !in_quotes && !args => {
-                in_quotes = true;
-            }
-            '"' if in_quotes && !args => {
-                args = true;
-            }
-            _ if in_quotes && !args => format_str.push(c),
-            _ if args => arguments.push(c),
-            _ => {}
-        }
-    }
-    let args_vec: Vec<String> = arguments
-        .split_whitespace()
-        .map(|s| s.to_string())
-        .collect();
-    Ok((format_str, args_vec))
-}
+    // The first arg is the format, the rest are values; expand into `out`.
+    let fmt = args[0];
+    let mut arg_i = 1usize;
+    let mut out = [0u8; 256];
+    let mut n = 0usize;
 
-fn format_string(format_str: &str, arguments: &[String]) -> Result<String, String> {
-    let mut result = String::new();
-    let mut arg_index = 0;
-    let mut chars = format_str.chars().peekable();
-
+    let mut chars = fmt.bytes();
     while let Some(c) = chars.next() {
-        if c == '%' {
-            let specifier = chars.next().ok_or("Incomplete format specifier")?;
-            if arg_index >= arguments.len() {
-                return Err(format!("Missing argument for %{}", specifier));
-            }
-
-            match specifier {
-                'd' | 'i' => {
-                    if arguments[arg_index].parse::<i64>().is_err() {
-                        return Err(format!(
-                            "Expected integer for %{}, got '{}'",
-                            specifier, arguments[arg_index]
-                        ));
-                    }
-                    result.push_str(&arguments[arg_index]);
+        if c == b'%' {
+            let Some(spec) = chars.next() else { break };
+            let value = if arg_i < args.len() { args[arg_i] } else { "" };
+            arg_i += 1;
+            match spec {
+                b's' => {
+                    let take = value.len().min(out.len() - n - 1);
+                    out[n..n + take].copy_from_slice(&value.as_bytes()[..take]);
+                    n += take;
                 }
-                'f' => {
-                    if arguments[arg_index].parse::<f64>().is_err() {
-                        return Err(format!(
-                            "Expected float for %{}, got '{}'",
-                            specifier, arguments[arg_index]
-                        ));
+                b'd' | b'i' => match parse_i64(value) {
+                    Some(v) => {
+                        let text = i64_text(v);
+                        let take = text.len().min(out.len() - n - 1);
+                        out[n..n + take].copy_from_slice(&text[..take]);
+                        n += take;
                     }
-                    result.push_str(&arguments[arg_index]);
+                    None => {
+                        let mut vbuf = [0u8; 32];
+                        let cval = console::nul_into(&mut vbuf, value).unwrap_or(core::ptr::null());
+                        shell_println!("Expected integer, got '%s'", cval);
+                        return;
+                    }
+                },
+                b'%' => {
+                    if n + 1 < out.len() {
+                        out[n] = b'%';
+                        n += 1;
+                    }
                 }
-                's' => result.push_str(&arguments[arg_index]),
-                '%' => result.push('%'),
-                _ => return Err(format!("Unsupported format specifier: %{}", specifier)),
+                _ => {
+                    shell_println!("Unsupported format specifier: %%%c", spec as isize);
+                    return;
+                }
             }
-            arg_index += 1;
-        } else {
-            result.push(c);
+        } else if n + 1 < out.len() {
+            out[n] = c;
+            n += 1;
         }
     }
+    out[n] = 0;
+    shell_println!("%s", out.as_ptr());
+}
 
-    if arg_index < arguments.len() {
-        return Err(format!(
-            "Too many arguments: expected {}, got {}",
-            arg_index,
-            arguments.len()
-        ));
+/// Decimal text of `v` (front-aligned in a fresh buffer).
+fn i64_text(v: i64) -> [u8; 24] {
+    let mut tmp = [0u8; 24];
+    let neg = v < 0;
+    let mut v = v.unsigned_abs();
+    let mut i = tmp.len();
+    if v == 0 {
+        i -= 1;
+        tmp[i] = b'0';
     }
-
-    Ok(result)
+    while v > 0 && i > 1 {
+        i -= 1;
+        tmp[i] = b'0' + (v % 10) as u8;
+        v /= 10;
+    }
+    if neg {
+        i -= 1;
+        tmp[i] = b'-';
+    }
+    let mut out = [0u8; 24];
+    let text = &tmp[i..];
+    let start = out.len() - text.len();
+    out[start..].copy_from_slice(text);
+    out
 }

@@ -1,4 +1,4 @@
-// Copyright (c) 2025 vivo Mobile Communication Co., Ltd.
+// Copyright (c) 2026 vivo Mobile Communication Co., Ltd.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -12,22 +12,24 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::{fs::File, path::Path};
 
-pub fn command(args: &[&str]) -> Result<(), String> {
+use crate::{console, fsutil};
+
+pub fn command(args: &[&str]) {
     if args.is_empty() {
-        return Err("Usage: touch <file1> <file2> ...".to_string());
+        crate::shell_println!("Usage: touch <file1> <file2> ...");
+        return;
     }
-
     for filename in args {
-        let path = Path::new(filename);
-        if path.exists() {
-            let _ = File::open(path)
-                .map_err(|e| format!("Unable to open file '{}': {}", filename, e))?;
-        } else {
-            File::create(path)
-                .map_err(|e| format!("Unable to create file '{}': {}", filename, e))?;
+        let mut buf = [0u8; 256];
+        let Some(cpath) = console::nul_into(&mut buf, filename) else {
+            crate::shell_println!("touch: path too long");
+            continue;
+        };
+        // Create the file if it does not exist; opening succeeds either way.
+        let fd = unsafe { fsutil::open(cpath, libc::O_CREAT | libc::O_WRONLY, 0o644) };
+        if fd >= 0 {
+            unsafe { fsutil::close(fd) };
         }
     }
-    Ok(())
 }

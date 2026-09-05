@@ -12,34 +12,39 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! `run` — launch a dynamic application through the `ApplicationLaunch`
-//! syscall (C29, §18.2). The kernel resolves the path against the seeded
-//! system image and links the app against the Ready `libc.so.1` instance.
 
-use std::ffi::{c_char, CString};
+use core::ffi::{c_char, c_long};
 
-use librs::spawn::spawn;
+use crate::{console, fsutil, shell_println};
 
-pub fn command(args: &[&str]) -> Result<(), String> {
+pub fn command(args: &[&str]) {
     if args.is_empty() {
-        return Err("Usage: run <path> [arg...]".to_string());
+        shell_println!("Usage: run <path> [arg...]");
+        return;
     }
 
-    let path = CString::new(args[0]).map_err(|_| "path contains NUL".to_string())?;
-    // POSIX shape: argv[0] is the application path, followed by the given
-    // arguments, NUL-terminated. `envp` stays empty for Phase 1.
-    let arg_strings: Vec<CString> = args
-        .iter()
-        .map(|arg| CString::new(*arg).map_err(|_| "argument contains NUL".to_string()))
-        .collect::<Result<_, _>>()?;
-    let mut arg_ptrs: Vec<*const c_char> = arg_strings.iter().map(|c| c.as_ptr()).collect();
-    arg_ptrs.push(std::ptr::null());
-    let envp = [std::ptr::null::<c_char>()];
+    // Build the POSIX argv shape (argv[0] = path, NUL-terminated) with fixed
+    // buffers: up to 16 arguments, each at most 128 bytes.
+    const MAX_ARGS: usize = 16;
+    let mut storage: [[u8; 128]; MAX_ARGS] = [[0; 128]; MAX_ARGS];
+    let mut ptrs: [*const c_char; MAX_ARGS + 1] = [core::ptr::null(); MAX_ARGS + 1];
+    let count = args.len().min(MAX_ARGS);
+    for i in 0..count {
+        match console::nul_into(&mut storage[i], args[i]) {
+            Some(p) => ptrs[i] = p,
+            None => {
+                shell_println!("run: argument too long");
+                return;
+            }
+        }
+    }
+    ptrs[count] = core::ptr::null();
+    let envp = [core::ptr::null::<c_char>()];
 
-    let result = spawn(path.as_ptr(), arg_ptrs.as_ptr(), envp.as_ptr());
+    let result: c_long = unsafe { fsutil::spawn(ptrs[0], ptrs.as_ptr(), envp.as_ptr()) };
     if result < 0 {
-        return Err(format!("spawn failed: errno {}", -result));
+        shell_println!("spawn failed: errno %d", -result as isize);
+    } else {
+        shell_println!("launched handle %d", result as isize);
     }
-    println!("launched handle {}", result);
-    Ok(())
 }

@@ -1,4 +1,4 @@
-// Copyright (c) 2025 vivo Mobile Communication Co., Ltd.
+// Copyright (c) 2026 vivo Mobile Communication Co., Ltd.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -12,21 +12,21 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use librs::direct;
-use std::ffi::CString;
 
-// std not support, call librs
-pub fn command(args: &[&str]) -> Result<(), String> {
+use crate::{console, fsutil, shell_println};
+
+pub fn command(args: &[&str]) {
     if args.len() != 1 {
-        return Err("Usage: unmount <target>".to_string());
+        shell_println!("Usage: umount <target>");
+        return;
     }
-
-    let target = CString::new(args[0]).map_err(|e| e.to_string())?;
-    let result = unsafe { direct::umount(target.as_ptr()) };
-
-    if result != 0 {
-        println!("mount failed (error code: {})", result);
+    let mut buf = [0u8; 256];
+    let Some(target) = console::nul_into(&mut buf, args[0]) else {
+        shell_println!("umount: path too long");
+        return;
+    };
+    let rc = unsafe { fsutil::umount(target) };
+    if rc != 0 {
+        shell_println!("umount failed (error code: %d)", rc);
     }
-
-    Ok(())
 }

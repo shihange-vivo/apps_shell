@@ -1,4 +1,4 @@
-// Copyright (c) 2025 vivo Mobile Communication Co., Ltd.
+// Copyright (c) 2026 vivo Mobile Communication Co., Ltd.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -12,14 +12,17 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::env;
+use core::ffi::c_char;
 
-pub fn command(_args: &[&str]) -> Result<(), String> {
-    match env::current_dir() {
-        Ok(path) => {
-            println!("{}", path.display());
-            Ok(())
-        }
-        Err(e) => Err(format!("Unable to get current directory: {}", e)),
+use crate::{fsutil, shell_println};
+
+pub fn command(_args: &[&str]) {
+    let mut cwd = [0u8; 256];
+    let p = unsafe { fsutil::getcwd(cwd.as_mut_ptr() as *mut c_char, cwd.len()) };
+    if p.is_null() {
+        shell_println!("Unable to get current directory");
+        return;
     }
+    // `getcwd` wrote the NUL-terminated path into `cwd`; print it directly.
+    shell_println!("%s", cwd.as_ptr());
 }

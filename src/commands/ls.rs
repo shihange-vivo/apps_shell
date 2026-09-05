@@ -1,4 +1,4 @@
-// Copyright (c) 2025 vivo Mobile Communication Co., Ltd.
+// Copyright (c) 2026 vivo Mobile Communication Co., Ltd.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -12,96 +12,100 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::{fs, os::unix::fs::MetadataExt, path::Path};
 
-pub fn command(args: &[&str]) -> Result<(), String> {
+use core::ffi::{c_char, c_void};
+
+use crate::{console, fsutil, shell_println};
+
+pub fn command(args: &[&str]) {
     let mut show_hidden = false;
     let mut long_format = false;
-    let mut target_path = ".";
+    let mut target = ".";
 
     for arg in args {
-        match arg {
-            &"-a" => show_hidden = true,
-            &"-l" => long_format = true,
-            &"-la" | &"-al" => {
+        match *arg {
+            "-a" => show_hidden = true,
+            "-l" => long_format = true,
+            "-la" | "-al" => {
                 show_hidden = true;
                 long_format = true;
             }
-            path if !path.starts_with('-') => target_path = path,
-            _ => return Err(format!("Unknown option: {}", arg)),
+            path if !path.starts_with('-') => target = path,
+            _ => {
+                let mut opt = [0u8; 32];
+                let copt = console::nul_into(&mut opt, arg).unwrap_or(core::ptr::null());
+                shell_println!("Unknown option: %s", copt);
+                return;
+            }
         }
     }
 
-    let path = Path::new(target_path);
-
-    if !path.exists() {
-        return Err(format!("Directory does not exist: {}", target_path));
+    let mut tbuf = [0u8; 256];
+    let Some(ctarget) = console::nul_into(&mut tbuf, target) else {
+        shell_println!("ls: path too long");
+        return;
+    };
+    let dir = unsafe { fsutil::opendir(ctarget) };
+    if dir.is_null() {
+        shell_println!("Directory does not exist: %s", ctarget);
+        return;
     }
 
-    let entries = fs::read_dir(path).map_err(|e| format!("Unable to read directory: {}", e))?;
-    let mut items: Vec<_> = entries
-        .filter_map(|entry| entry.ok())
-        .filter(|entry| entry.path().file_name().is_some())
-        .collect();
-    items.sort_by(|a, b| {
-        a.path()
-            .file_name()
-            .unwrap_or_default()
-            .cmp(b.path().file_name().unwrap_or_default())
-    });
-
-    for entry in items {
-        let path = entry.path();
-        let file_name = path.file_name().unwrap_or_default().to_string_lossy();
-
-        if !show_hidden && file_name.starts_with('.') {
+    // Phase 1 shell: no alloc, so entries print in readdir order (unsorted).
+    loop {
+        let dent = unsafe { fsutil::readdir(dir) };
+        if dent.is_null() {
+            break;
+        }
+        let dent = unsafe { &*dent };
+        let name = dent.d_name.as_ptr() as *const c_char;
+        let mut name_buf = [0u8; 256];
+        let name_bytes = fsutil::cstr_copy(&mut name_buf, name);
+        let Ok(name_str) = core::str::from_utf8(name_bytes) else { continue };
+        if name_str == "." || name_str == ".." {
+            continue;
+        }
+        if !show_hidden && name_str.starts_with('.') {
             continue;
         }
 
         if long_format {
-            let metadata = entry
-                .metadata()
-                .map_err(|e| format!("Unable to obtain file information: {}", e))?;
-            let file_type = if path.is_dir() { "d" } else { "-" };
-            let perms = metadata.mode();
-
-            let mode = format!(
-                "{}{}{}{}{}{}{}{}{}",
-                if perms & 0o400 != 0 { "r" } else { "-" },
-                if perms & 0o200 != 0 { "w" } else { "-" },
-                if perms & 0o100 != 0 { "x" } else { "-" },
-                if perms & 0o40 != 0 { "r" } else { "-" },
-                if perms & 0o20 != 0 { "w" } else { "-" },
-                if perms & 0o10 != 0 { "x" } else { "-" },
-                if perms & 0o4 != 0 { "r" } else { "-" },
-                if perms & 0o2 != 0 { "w" } else { "-" },
-                if perms & 0o1 != 0 { "x" } else { "-" },
+            // Build "<dir>/<name>" for the stat call.
+            let mut full = [0u8; 512];
+            let tlen = target.len();
+            if tlen + 1 + name_str.len() + 1 > full.len() {
+                continue;
+            }
+            full[..tlen].copy_from_slice(target.as_bytes());
+            full[tlen] = b'/';
+            full[tlen + 1..tlen + 1 + name_str.len()].copy_from_slice(name_str.as_bytes());
+            full[tlen + 1 + name_str.len()] = 0;
+            let mut st = core::mem::MaybeUninit::<libc::stat>::zeroed();
+            let mode = if unsafe { fsutil::stat(full.as_ptr() as *const c_char, st.as_mut_ptr()) } == 0 {
+                unsafe { st.assume_init() }.st_mode
+            } else {
+                0
+            };
+            let is_dir = (mode & libc::S_IFMT) == libc::S_IFDIR;
+            let perm = mode & 0o777;
+            shell_println!(
+                "%c%c%c%c%c%c%c%c%c %s",
+                if is_dir { b'd' as isize } else { b'-' as isize },
+                if perm & 0o400 != 0 { b'r' as isize } else { b'-' as isize },
+                if perm & 0o200 != 0 { b'w' as isize } else { b'-' as isize },
+                if perm & 0o100 != 0 { b'x' as isize } else { b'-' as isize },
+                if perm & 0o40 != 0 { b'r' as isize } else { b'-' as isize },
+                if perm & 0o20 != 0 { b'w' as isize } else { b'-' as isize },
+                if perm & 0o10 != 0 { b'x' as isize } else { b'-' as isize },
+                if perm & 0o4 != 0 { b'r' as isize } else { b'-' as isize },
+                if perm & 0o2 != 0 { b'w' as isize } else { b'-' as isize },
+                name_buf.as_ptr()
             );
-
-            let size = format_size(metadata.len());
-            println!("{}{} {} {}", file_type, mode, size, file_name);
-        } else if path.is_dir() {
-            println!("{}/", file_name);
+        } else if dent.d_type == libc::DT_DIR {
+            shell_println!("%s/", name_buf.as_ptr());
         } else {
-            println!("{}", file_name);
+            shell_println!("%s", name_buf.as_ptr());
         }
     }
-
-    Ok(())
-}
-
-fn format_size(size: u64) -> String {
-    const KB: u64 = 1024;
-    const MB: u64 = KB * 1024;
-    const GB: u64 = MB * 1024;
-
-    if size < KB {
-        format!("{}B", size)
-    } else if size < MB {
-        format!("{:.1}K", size as f64 / KB as f64)
-    } else if size < GB {
-        format!("{:.1}M", size as f64 / MB as f64)
-    } else {
-        format!("{:.1}G", size as f64 / GB as f64)
-    }
+    unsafe { fsutil::closedir(dir) };
 }

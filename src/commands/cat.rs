@@ -1,4 +1,4 @@
-// Copyright (c) 2025 vivo Mobile Communication Co., Ltd.
+// Copyright (c) 2026 vivo Mobile Communication Co., Ltd.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -12,25 +12,35 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::{
-    fs::File,
-    io::{BufRead, BufReader},
-};
 
-pub fn command(args: &[&str]) -> Result<(), String> {
+use core::ffi::c_void;
+
+use crate::{console, fsutil, shell_println};
+
+pub fn command(args: &[&str]) {
     if args.is_empty() {
-        return Err("Usage: cat [<path> [<path> [<path> ...]]]".to_string());
+        shell_println!("Usage: cat [<path> [<path> ...]]");
+        return;
     }
     for filename in args {
-        let file = File::open(filename)
-            .map_err(|e| format!("unable to open file '{}': {}", filename, e))?;
-        let reader = BufReader::new(file);
-        for line in reader.lines() {
-            println!(
-                "{}",
-                line.map_err(|e| format!("reading file failed: {}", e))?
-            );
+        let mut path = [0u8; 256];
+        let Some(cpath) = console::nul_into(&mut path, filename) else {
+            shell_println!("cat: path too long");
+            continue;
+        };
+        let fd = unsafe { fsutil::open(cpath, 0 /* O_RDONLY */, 0) };
+        if fd < 0 {
+            shell_println!("unable to open file '%s'", cpath);
+            continue;
         }
+        let mut buf = [0u8; 512];
+        loop {
+            let n = unsafe { fsutil::read(fd, buf.as_mut_ptr() as *mut c_void, buf.len()) };
+            if n <= 0 {
+                break;
+            }
+            console::write_stdout(&buf[..n as usize]);
+        }
+        unsafe { fsutil::close(fd) };
     }
-    Ok(())
 }

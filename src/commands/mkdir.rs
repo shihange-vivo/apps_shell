@@ -1,4 +1,4 @@
-// Copyright (c) 2025 vivo Mobile Communication Co., Ltd.
+// Copyright (c) 2026 vivo Mobile Communication Co., Ltd.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -12,95 +12,73 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::{
-    fs, io,
-    os::unix::fs::PermissionsExt,
-    path::{Path, PathBuf},
-};
 
-pub fn command(args: &[&str]) -> Result<(), String> {
-    if args.is_empty() {
-        return Err("Usage: mkdir [OPTION]... DIRECTORY...".to_string());
+use crate::{console, fsutil, shell_println};
+
+fn parse_octal(s: &str) -> Option<u32> {
+    if s.is_empty() {
+        return None;
     }
+    let mut v = 0u32;
+    for b in s.bytes() {
+        let d = (b as char).to_digit(8)?;
+        v = v.checked_mul(8)?.checked_add(d)?;
+    }
+    Some(v)
+}
 
+pub fn command(args: &[&str]) {
+    if args.is_empty() {
+        shell_println!("Usage: mkdir [OPTION]... DIRECTORY...");
+        return;
+    }
     let mut parents = false;
     let mut verbose = false;
-    let mut mode = None;
-    let mut directories = Vec::new();
+    let mut mode: Option<u32> = None;
 
-    let mut iter = args.iter();
-    while let Some(arg) = iter.next() {
-        match *arg {
+    let mut i = 0usize;
+    while i < args.len() {
+        match args[i] {
             "-p" | "--parents" => parents = true,
             "-v" | "--verbose" => verbose = true,
             "-m" | "--mode" => {
-                mode = iter.next().map(|s| parse_mode(s)).transpose()?.flatten();
-            }
-            _ if arg.starts_with('-') => return Err(format!("invalid option -- '{}'", arg)),
-            _ => directories.push(arg),
-        }
-    }
-
-    if directories.is_empty() {
-        return Err("missing operand".to_string());
-    }
-
-    for dir in directories {
-        let path = Path::new(dir);
-
-        let result = if parents {
-            create_dir_recursive(path)
-        } else {
-            fs::create_dir(path)
-        };
-
-        match result {
-            Ok(_) => {
-                if let Some(m) = mode {
-                    if let Err(e) = set_permissions(path, m) {
-                        return Err(format!("failed to set permissions for '{}': {}", dir, e));
+                i += 1;
+                if i < args.len() {
+                    match parse_octal(args[i]) {
+                        Some(m) => mode = Some(m),
+                        None => {
+                            let mut mbuf = [0u8; 32];
+                            let cmode = console::nul_into(&mut mbuf, args[i]).unwrap_or(core::ptr::null());
+                            shell_println!("invalid mode '%s'", cmode);
+                            return;
+                        }
                     }
                 }
-                if verbose {
-                    println!("created directory '{}'", dir);
-                }
             }
-            Err(e) => {
-                if parents && e.kind() == io::ErrorKind::AlreadyExists {
+            arg if arg.starts_with('-') => {
+                let mut obuf = [0u8; 32];
+                let copt = console::nul_into(&mut obuf, arg).unwrap_or(core::ptr::null());
+                shell_println!("invalid option -- '%s'", copt);
+                return;
+            }
+            dir => {
+                let mut buf = [0u8; 256];
+                let Some(cdir) = console::nul_into(&mut buf, dir) else {
+                    shell_println!("mkdir: path too long");
+                    continue;
+                };
+                let rc = unsafe { fsutil::mkdir(cdir, mode.unwrap_or(0o755) as core::ffi::c_int) };
+                if rc != 0 {
+                    if !parents {
+                        shell_println!("cannot create directory '%s'", cdir);
+                    }
                     continue;
                 }
-                return Err(format!("cannot create directory '{}': {}", dir, e));
+                if verbose {
+                    shell_println!("created directory '%s'", cdir);
+                }
             }
         }
+        i += 1;
     }
-
-    Ok(())
-}
-
-fn parse_mode(mode_str: &str) -> Result<Option<u32>, String> {
-    if mode_str.is_empty() {
-        return Ok(None);
-    }
-
-    u32::from_str_radix(mode_str, 8)
-        .map_err(|_| format!("invalid mode '{}'", mode_str))
-        .map(Some)
-}
-
-fn set_permissions(path: &Path, mode: u32) -> io::Result<()> {
-    let permissions = fs::Permissions::from_mode(mode);
-    fs::set_permissions(path, permissions)
-}
-
-fn create_dir_recursive(path: &Path) -> io::Result<()> {
-    let mut current_path = PathBuf::new();
-    for component in path.components() {
-        current_path.push(component);
-        if let Err(e) = fs::create_dir(&current_path) {
-            if e.kind() != io::ErrorKind::AlreadyExists {
-                return Err(e);
-            }
-        }
-    }
-    Ok(())
 }

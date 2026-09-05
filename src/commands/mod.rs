@@ -35,7 +35,7 @@ pub mod umount;
 
 extern crate phf;
 use self::phf::{phf_map, Map};
-pub type CommandHandler = fn(&[&str]) -> Result<(), String>;
+pub type CommandHandler = fn(&[&str]);
 
 pub struct CommandInfo {
     pub handler: CommandHandler,

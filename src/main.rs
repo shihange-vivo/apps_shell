@@ -1,4 +1,4 @@
-// Copyright (c) 2025 vivo Mobile Communication Co., Ltd.
+// Copyright (c) 2026 vivo Mobile Communication Co., Ltd.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -12,57 +12,96 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-extern crate librs;
-extern crate rsrt;
-use std::{
-    io::{self, Write},
-    thread,
-};
+//! The bootstrap shell as a dynamic application (C29, §18.2).
+//!
+//! The shell is a C-style `no_std` PIE: `blueos_scrt1::_start` is its ELF
+//! entry, which resolves this crate's `main` and tail-calls
+//! `__librs_start_main(main, info)` from the shared `libc.so.1`. It has no
+//! Rust `alloc` — every path and line lives in a fixed buffer and crosses the
+//! DSO boundary as a NUL-terminated C string (see `console`/`fsutil`).
+
+#![no_std]
+#![no_main]
+#![feature(c_variadic)]
+
+use core::ffi::{c_char, c_int, c_void};
 
 mod commands;
-use commands::COMMANDS;
+mod console;
+mod fsutil;
 
-#[cfg(not(enable_vfs))]
-compile_error!("Shell app requires vfs to run. Please enable vfs in Kconfig.");
+#[panic_handler]
+fn panic(_info: &core::panic::PanicInfo) -> ! {
+    loop {}
+}
 
-fn main() {
-    thread::Builder::new()
-        .name("shell".to_string())
-        .stack_size(65536)
-        .spawn(move || {
-            println!("Hello, shell!");
-            shell_loop();
-        })
-        .unwrap()
-        .join()
-        .unwrap();
+const MAX_INPUT: usize = 256;
+const MAX_ARGS: usize = 16;
+
+/// The dynamic entry: run the shell loop on the application main thread.
+/// Returning exits the application, which the kernel reaps (§18.2).
+///
+#[no_mangle]
+pub extern "C" fn main(
+    _argc: c_int,
+    _argv: *const *const c_char,
+    _envp: *const *const c_char,
+) -> c_int {
+    shell_loop();
+    0
 }
 
 fn shell_loop() {
+    shell_println!("Hello, shell!");
     loop {
-        print!("> ");
-        io::stdout().flush().unwrap();
-        let mut input = String::new();
-        io::stdin().read_line(&mut input).unwrap();
-        let input = input.trim();
-        if input == "exit" {
-            break;
-        }
+        shell_print!("> ");
 
-        if input.is_empty() {
+        // Read one committed line from the console (fd 0). The kernel tty
+        // commits canonical input on CR, so a returned line ends with '\n'.
+        let mut input = [0u8; MAX_INPUT];
+        let mut len = 0usize;
+        while len + 1 < MAX_INPUT {
+            let n = unsafe { fsutil::read(0, input[len..].as_mut_ptr() as *mut c_void, 1) };
+            if n <= 0 {
+                // EOF or error: retire the shell application.
+                return;
+            }
+            if input[len] == b'\n' {
+                break;
+            }
+            len += 1;
+        }
+        input[len] = 0;
+
+        let line = core::str::from_utf8(&input[..len]).unwrap_or("");
+        let line = line.trim_matches(|c| c == ' ' || c == '\r' || c == '\t');
+        if line.is_empty() {
             continue;
         }
 
-        let parts: Vec<&str> = input.split_whitespace().collect();
-        let cmd = parts[0];
-        let args = &parts[1..];
-        match COMMANDS.get(cmd) {
-            Some(info) => {
-                if let Err(e) = (info.handler)(args) {
-                    println!("Error: {}", e);
+        let mut argv: [&str; MAX_ARGS] = [""; MAX_ARGS];
+        let mut argc = 0usize;
+        for token in line.split_whitespace() {
+            if argc == MAX_ARGS {
+                break;
+            }
+            argv[argc] = token;
+            argc += 1;
+        }
+        let args = &argv[..argc];
+
+        if args[0] == "exit" {
+            break;
+        }
+
+        match commands::COMMANDS.get(args[0]) {
+            Some(info) => (info.handler)(&args[1..]),
+            None => {
+                let mut buf = [0u8; 64];
+                if let Some(cmd) = console::nul_into(&mut buf, args[0]) {
+                    shell_println!("Unknown command: %s", cmd);
                 }
             }
-            None => println!("Unknown command: {}", cmd),
         }
     }
 }

@@ -12,18 +12,36 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-pub fn command(args: &[&str]) -> Result<(), String> {
-    if args.len() < 1 {
-        return Err("Invalid args".to_string());
+
+use core::ffi::c_void;
+
+use crate::shell_println;
+
+fn parse_hex(s: &str) -> Option<usize> {
+    if s.is_empty() {
+        return None;
     }
-    let ptr: usize = if args[0].starts_with("0x") {
-        usize::from_str_radix(args[0].strip_prefix("0x").unwrap(), 16)
-            .map_err(|_| "Wrong hex format".to_string())?
-    } else {
-        args[0].parse().map_err(|_| "Wrong format".to_string())?
+    let digits = s.strip_prefix("0x").or_else(|| s.strip_prefix("0X")).unwrap_or(s);
+    let mut v = 0usize;
+    for b in digits.bytes() {
+        let d = (b as char).to_digit(16)?;
+        v = v.checked_mul(16)?.checked_add(d as usize)?;
+    }
+    Some(v)
+}
+
+extern "C" {
+    fn free(ptr: *mut c_void);
+}
+
+pub fn command(args: &[&str]) {
+    if args.is_empty() {
+        shell_println!("Usage: dealloc <ptr>");
+        return;
+    }
+    let Some(ptr) = parse_hex(args[0]) else {
+        shell_println!("Wrong format");
+        return;
     };
-    unsafe {
-        libc::free(ptr as *mut libc::c_void);
-    }
-    Ok(())
+    unsafe { free(ptr as *mut c_void) };
 }

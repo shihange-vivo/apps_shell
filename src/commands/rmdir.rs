@@ -1,4 +1,4 @@
-// Copyright (c) 2025 vivo Mobile Communication Co., Ltd.
+// Copyright (c) 2026 vivo Mobile Communication Co., Ltd.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -12,15 +12,22 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::fs;
-pub fn command(args: &[&str]) -> Result<(), String> {
-    if args.is_empty() {
-        return Err("Usage: rmdir <path1> <path2> ...".to_string());
-    }
 
-    for dir_name in args {
-        fs::remove_dir(dir_name)
-            .map_err(|e| format!("Failed to remove dir '{}': {}", dir_name, e))?;
+use crate::{console, fsutil, shell_println};
+
+pub fn command(args: &[&str]) {
+    if args.is_empty() {
+        shell_println!("Usage: rmdir <path1> <path2> ...");
+        return;
     }
-    Ok(())
+    for dir in args {
+        let mut buf = [0u8; 256];
+        let Some(cdir) = console::nul_into(&mut buf, dir) else {
+            shell_println!("rmdir: path too long");
+            continue;
+        };
+        if unsafe { fsutil::rmdir(cdir) } != 0 {
+            shell_println!("Failed to remove dir '%s'", cdir);
+        }
+    }
 }

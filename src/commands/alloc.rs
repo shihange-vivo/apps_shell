@@ -12,23 +12,38 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-pub fn command(args: &[&str]) -> Result<(), String> {
+
+use core::ffi::c_void;
+
+use crate::shell_println;
+
+fn parse_usize(s: &str) -> Option<usize> {
+    let mut v = 0usize;
+    for b in s.bytes() {
+        let d = (b as char).to_digit(10)?;
+        v = v.checked_mul(10)?.checked_add(d as usize)?;
+    }
+    Some(v)
+}
+
+extern "C" {
+    fn posix_memalign(memptr: *mut *mut c_void, alignment: usize, size: usize) -> i32;
+}
+
+pub fn command(args: &[&str]) {
     if args.len() < 2 {
-        return Err("Invalid args".to_string());
+        shell_println!("Usage: alloc <size> <align>");
+        return;
     }
-    let size: usize = args[0].parse().map_err(|_| "Wrong format".to_string())?;
-    let align: usize = args[1].parse().map_err(|_| "Wrong format".to_string())?;
-    let mut result: *mut libc::c_void = std::ptr::null_mut();
-    unsafe {
-        let rc = libc::posix_memalign(
-            &mut result as *mut _,
-            align as libc::size_t,
-            size as libc::size_t,
-        );
-        if rc != 0 || result.is_null() {
-            return Err("Unable to allocate memory".to_string());
-        }
+    let (Some(size), Some(align)) = (parse_usize(args[0]), parse_usize(args[1])) else {
+        shell_println!("Wrong format");
+        return;
+    };
+    let mut result: *mut c_void = core::ptr::null_mut();
+    let rc = unsafe { posix_memalign(&mut result, align, size) };
+    if rc != 0 || result.is_null() {
+        shell_println!("Unable to allocate memory");
+    } else {
+        shell_println!("0x%x", result as usize);
     }
-    println!("{:?}", result);
-    Ok(())
 }

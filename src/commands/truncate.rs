@@ -1,4 +1,4 @@
-// Copyright (c) 2025 vivo Mobile Communication Co., Ltd.
+// Copyright (c) 2026 vivo Mobile Communication Co., Ltd.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -12,26 +12,39 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::fs::OpenOptions;
 
-pub fn command(args: &[&str]) -> Result<(), String> {
-    if args.len() != 2 {
-        return Err("Usage: truncate <file> <size>".to_string());
+use crate::{console, fsutil, shell_println};
+
+fn parse_usize(s: &str) -> Option<usize> {
+    let mut v = 0usize;
+    for b in s.bytes() {
+        let d = (b as char).to_digit(10)?;
+        v = v.checked_mul(10)?.checked_add(d as usize)?;
     }
+    Some(v)
+}
 
-    let filename = args[0];
-    let size: u64 = args[1]
-        .parse()
-        .map_err(|_| "Invalid size value".to_string())?;
-
-    let file = OpenOptions::new()
-        .read(true)
-        .write(true)
-        .open(filename)
-        .map_err(|e| format!("Unable to open file '{}': {}", filename, e))?;
-
-    file.set_len(size)
-        .map_err(|e| format!("Unable to set file size: {}", e))?;
-
-    Ok(())
+pub fn command(args: &[&str]) {
+    if args.len() != 2 {
+        shell_println!("Usage: truncate <file> <size>");
+        return;
+    }
+    let mut buf = [0u8; 256];
+    let Some(cpath) = console::nul_into(&mut buf, args[0]) else {
+        shell_println!("truncate: path too long");
+        return;
+    };
+    let Some(size) = parse_usize(args[1]) else {
+        shell_println!("Invalid size value");
+        return;
+    };
+    let fd = unsafe { fsutil::open(cpath, libc::O_WRONLY, 0) };
+    if fd < 0 {
+        shell_println!("Unable to open file '%s'", cpath);
+        return;
+    }
+    unsafe {
+        fsutil::ftruncate(fd, size as libc::off_t);
+        fsutil::close(fd);
+    }
 }
