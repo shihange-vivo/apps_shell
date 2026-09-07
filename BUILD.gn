@@ -41,13 +41,16 @@ dynamic_app("shell") {
   rustflags = [
     "-Clinker=clang",
     "-Clink-arg=-fuse-ld=lld",
-    "-Clink-arg=--target=thumbv7m-none-eabi",
+    "-Clink-arg=--target=${dynamic_link_target}",
     "-Clink-arg=-L${_lib_dir}",
     "-Clink-arg=-l:liblibrs.so",
     # scrt1 resolves `main` through its GOT slot; export the symbol so LLD
     # emits the R_ARM_GLOB_DAT that the kernel loader fills at load time.
     "-Clink-arg=-Wl,--export-dynamic-symbol=main",
   ]
+  foreach(_option, dynamic_link_options) {
+    rustflags += [ "-Clink-arg=${_option}" ]
+  }
 }
 
 # The boot image for the board: the kernel with the embedded system image.
