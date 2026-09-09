@@ -54,8 +54,9 @@ dynamic_app("shell") {
 }
 
 # The boot image for the board: the kernel with the embedded system image.
-# The shell PIE above is embedded and launched by the boot seed path, so the
-# runner boots `kernel_image`, not the shell ELF directly.
+# Its sole static entry launches the shell PIE after the boot seed path has
+# assembled the application service, so the runner boots `kernel_image`, not
+# the shell ELF directly.
 gen_qemu_runner("shell_runner") {
   img = "//kernel/kernel:kernel_image"
   qemu = "$qemu_exe"
