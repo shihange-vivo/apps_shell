@@ -54,7 +54,9 @@ pub extern "C" fn main(
 fn shell_loop() {
     shell_println!("Hello, shell!");
     loop {
-        shell_print!("> ");
+        // `printf` is line-buffered, while the tty echoes input independently.
+        // Write the prompt directly so it is visible before blocking in read.
+        console::write_str("> ");
 
         // Read one committed line from the console (fd 0). The kernel tty
         // commits canonical input on CR, so a returned line ends with '\n'.

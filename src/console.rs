@@ -71,6 +71,9 @@ pub fn write_stdout(bytes: &[u8]) {
     unsafe {
         crate::fsutil::write(1, bytes.as_ptr() as *const core::ffi::c_void, bytes.len());
     }
+    // Keep the external call from becoming a tail call through an even-address
+    // Thumb PLT veneer. Normal calls use `bl ...@plt` and preserve Thumb state.
+    core::sync::atomic::compiler_fence(core::sync::atomic::Ordering::SeqCst);
 }
 
 /// Write a NUL-terminated C string to fd 1.
